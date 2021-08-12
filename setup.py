@@ -33,6 +33,7 @@ long_description = """Common library with minimal readline functionality for Win
 """
 
 install_requires = [
+    "asyncio"
 ]
 
 setup(

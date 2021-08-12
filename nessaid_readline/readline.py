@@ -6,6 +6,7 @@
 #
 
 import sys
+import time
 import string
 
 import nessaid_readline.key as key
@@ -88,10 +89,18 @@ class NessaidReadline():
             "lookup-forward": self._handle_history_lookup_forward,
             "line-cancel": self._handle_keyboard_interrupt,
             "line-eof": self._handle_line_eof,
+            "toggle-bell": self._handle_toggle_bell,
         }
         self.load_default_bindings()
         self._history_size = history_size
         self._prepare_history_entry = self.prepare_history_entry
+
+        self._enable_bell = True
+        self._bell_silence_time = 2
+        self._last_bell_time = 0
+        self._suppress_bell = False
+        self._last_completion = None
+        self._last_completion_linebuf = None
 
     def load_default_bindings(self):
         self._key_bindings.clear()
@@ -116,6 +125,7 @@ class NessaidReadline():
             key.CTRL_D: self._handle_line_eof,
             key.LF: self._handle_newline,
             key.CR: self._handle_cr,
+            key.CTRL_B: self._handle_toggle_bell,
         })
 
     def get_completer(self):
@@ -140,6 +150,8 @@ class NessaidReadline():
             self._stdout.write("\b" * (len(trailing_part) + 1))
             self._stdout.flush()
             self._line_buffer = self._line_buffer[:self._caret_pos - len(self._line_buffer)] + trailing_part
+        else:
+            self.play_bell()
         return False, None
 
     def _handle_backspace(self, ch):
@@ -151,6 +163,8 @@ class NessaidReadline():
             self._stdout.flush()
             self._caret_pos -= 1;
             self._line_buffer = self._line_buffer[:-len(trailing_buf) - 1] + trailing_buf
+        else:
+            self.play_bell()
 
         return False, None
 
@@ -169,7 +183,32 @@ class NessaidReadline():
                     history_line = self._history[self._history_index]
                     self._handle_line_clear("")
                     self.insert_text(history_line)
+                else:
+                    self.play_bell()
+            else:
+                self.play_bell()
+
         return False, None
+
+    def play_bell(self):
+        if not self._suppress_bell:
+
+            if self._enable_bell and (self._last_bell_time + self._bell_silence_time) < time.time():
+                self._last_bell_time = time.time()
+                self._stdout.write("\a")
+                self._stdout.flush()
+
+    def enable_bell(self, enable=True):
+        self._enable_bell = False if enable is False else True
+
+    def set_bell_silence_time(self, t):
+        try:
+            t = float(t)
+            if t < 0:
+                t = 2
+        except:
+            t = 2
+        self._bell_silence_time = t
 
     def _handle_history_next(self, ch):
         if not self._bare_input:
@@ -183,6 +222,8 @@ class NessaidReadline():
                 history_line = self._history[self._history_index]
                 self._handle_line_clear("")
                 self.insert_text(history_line)
+            elif self._input_backup == self._line_buffer:
+                self.play_bell()
             elif self._input_backup is not None:
                 self._handle_line_clear("")
                 self.insert_text(self._input_backup)
@@ -195,6 +236,8 @@ class NessaidReadline():
             self._stdout.write("\b")
             self._stdout.flush()
             self._caret_pos -= 1
+        else:
+            self.play_bell()
         return False, None
 
     def _handle_line_right(self, ch):
@@ -202,15 +245,23 @@ class NessaidReadline():
             self._stdout.write(self._line_buffer[self._caret_pos])
             self._stdout.flush()
             self._caret_pos += 1
+        else:
+            self.play_bell()
         return False, None
 
     def _handle_line_start(self, ch):
+        if not self._line_buffer or not self._caret_pos:
+            self.play_bell()
+            return False, None
         self._stdout.write("\b" * self._caret_pos)
         self._stdout.flush()
         self._caret_pos = 0
         return False, None
 
     def _handle_line_end(self, ch):
+        if not self._line_buffer or self._caret_pos == len(self._line_buffer):
+            self.play_bell()
+            return False, None
         if self._caret_pos < len(self._line_buffer):
             trailing_buf = self._line_buffer[self._caret_pos:]
             self._stdout.write(trailing_buf)
@@ -228,6 +279,8 @@ class NessaidReadline():
             self._stdout.flush()
             self._line_buffer = ""
             self._caret_pos = 0
+        else:
+            self.play_bell()
         return False, None
 
     def _handle_keyboard_interrupt(self, ch):
@@ -254,12 +307,15 @@ class NessaidReadline():
         if self._completer:
             index = 0
             completer_options = []
+            pre_complete_linebuf = self._line_buffer
+
             while True:
                 c = self._completer(self._line_buffer, index)
                 index += 1
                 if c is None:
                     break
                 completer_options.append(c)
+
             if completer_options:
                 self._stdout.write("\r\n\r\n")
                 for c in completer_options:
@@ -270,10 +326,21 @@ class NessaidReadline():
                 self._stdout.flush()
                 self._caret_pos = len(self._line_buffer)
 
+                if set(completer_options) == self._last_completion and self._last_completion_linebuf == self._line_buffer:
+                    if pre_complete_linebuf == self._line_buffer:
+                        self.play_bell()
+
+                self._last_completion = set(completer_options)
+                self._last_completion_linebuf = self._line_buffer
+            else:
+                if not self._last_completion:
+                    self.play_bell()
+
         self._completing = False
         return False, None
 
     def _handle_escape(self, ch):
+        self.play_bell()
         return False, None
 
     def _handle_history_start(self, ch):
@@ -281,10 +348,15 @@ class NessaidReadline():
             if self._history:
                 if self._input_backup is None:
                     self._input_backup = self._line_buffer
-                self._history_index = 0
-                history_line = self._history[0]
-                self._handle_line_clear("")
-                self.insert_text(history_line)
+                if self._history_index == 0:
+                    self.play_bell()
+                else:
+                    self._history_index = 0
+                    history_line = self._history[0]
+                    self._handle_line_clear("")
+                    self.insert_text(history_line)
+            else:
+                self.play_bell()
         return False, None
 
     def _handle_history_end(self, ch):
@@ -292,15 +364,27 @@ class NessaidReadline():
             if self._history:
                 if self._input_backup is None:
                     self._input_backup = self._line_buffer
-
-                self._history_index = len(self._history)
-                self._handle_line_clear("")
-                self.insert_text(self._input_backup)
-                self._input_backup = None
+                if self._history_index == len(self._history):
+                    self.play_bell()
+                else:
+                    self._history_index = len(self._history)
+                    self._handle_line_clear("")
+                    self.insert_text(self._input_backup)
+                    self._input_backup = None
+            else:
+                self.play_bell()
         return False, None
 
     def _handle_insert_replace(self, ch):
         self._replace_mode = not self._replace_mode
+        return False, None
+
+    def _handle_toggle_bell(self, ch):
+        self._enable_bell = not self._enable_bell
+        self._stdout.write("\a")
+        if self._enable_bell:
+            self._stdout.write("\a")
+        self._stdout.flush()
         return False, None
 
     def set_completer(self, completer):
@@ -320,8 +404,10 @@ class NessaidReadline():
             self._key_bindings[SPECIAL_KEY_MAP[key]] = self._op_bindings[op]
 
     def insert_text(self, text):
+        self._suppress_bell = True
         self._handle_line_end("")
         self.send(text)
+        self._suppress_bell = False
 
     def send(self, text):
         for ch in text:
@@ -332,6 +418,7 @@ class NessaidReadline():
                 except Exception as e:
                     if type(e) in [NessaidReadlineEOF, NessaidReadlineKeyboadInterrupt]:
                         continue
+                    self.play_bell()
                     raise e
             elif self.is_printable(ch):
                 self._putchar(ch)
@@ -427,6 +514,8 @@ class NessaidReadline():
 
                 if ch in self._key_bindings:
                     key_handler = self._key_bindings[ch]
+                    if key_handler != self._handle_complete:
+                        self._last_completion = None
                     res, ret = key_handler(ch)
                     self._add_to_history(ret)
                     if res is True:
@@ -436,6 +525,7 @@ class NessaidReadline():
         except Exception as e:
             if type(e) in [NessaidReadlineKeyboadInterrupt, NessaidReadlineEOF]:
                 raise e
+            self.play_bell()
             self._stderr.write("Exception in input: " + str(type(e)) + " " + str(e))
             return ""
         finally:
@@ -446,6 +536,8 @@ class NessaidReadline():
             self._input_history = False
             self._input_backup = None
             self._bare_input = False
+            self._last_completion = None
+            self._last_completion_linebuf = None
 
     def input(self, prompt=None, mask_input=False):
         return self._input(prompt or "", mask_input=mask_input, bare_input=True)
