@@ -5,6 +5,7 @@
 # file included as part of this package.
 #
 
+import re
 import sys
 import time
 import string
@@ -21,30 +22,7 @@ class NessaidReadlineKeyboadInterrupt(Exception):
     pass
 
 
-SPECIAL_KEY_MAP = {
-    "cr": key.CR,
-    "lf": key.LF,
-    "tab": key.TAB,
-    "up": key.UP,
-    "down": key.DOWN,
-    "page-up": key.PAGE_UP,
-    "page-down": key.PAGE_DOWN,
-    "insert": key.INSERT,
-    "delete": key.DELETE,
-    "backspace": key.BACKSPACE,
-    "home": key.HOME,
-    "end": key.END,
-    "left": key.LEFT,
-    "right": key.RIGHT,
-    "up": key.UP,
-    "down": key.DOWN,
-    "esc": key.ESC,
-    "ctrl-a": key.CTRL_A,
-    "ctrl-c": key.CTRL_C,
-    "ctrl-d": key.CTRL_D,
-    "ctrl-d": key.CTRL_E,
-    "ctrl-l": key.CTRL_L,
-}
+SPECIAL_KEY_MAP = key.KEY_NAME_MAP
 
 
 class NessaidReadline():
@@ -69,12 +47,16 @@ class NessaidReadline():
         self._history_index = None
         self._input_backup = None
 
-        self._key_bindings = {}
+        self._normal_key_bindings = {}
+        self._lookup_key_bindings = {}
 
         self._op_bindings = {
+            "carriage-return": self._handle_cr,
+            "newline": self._handle_newline,
             "delete": self._handle_delete,
             "complete": self._handle_complete,
             "backspace": self._handle_backspace,
+            "lookup-backspace": self._handle_lookup_backspace,
             "history-previous": self._handle_history_previous,
             "history-next": self._handle_history_next,
             "history-first": self._handle_history_start,
@@ -90,7 +72,12 @@ class NessaidReadline():
             "line-cancel": self._handle_keyboard_interrupt,
             "line-eof": self._handle_line_eof,
             "toggle-bell": self._handle_toggle_bell,
+            "open-reverse-lookup": self._handle_reverse_lookup,
+            "forward-lookup-result": self._handle_lookup_result,
+            "cancel-lookup-result": self._handle_cancel_lookup_result,
+            "none": self._handle_nop,
         }
+
         self.load_default_bindings()
         self._history_size = history_size
         self._prepare_history_entry = self.prepare_history_entry
@@ -101,52 +88,86 @@ class NessaidReadline():
         self._suppress_bell = False
         self._last_completion = None
         self._last_completion_linebuf = None
+        self._init_lookup_state()
+
+    def write(self, s):
+        try:
+            op = "*" * len(s) if self._mask_input else s
+            self._stdout.write(op)
+            self._stdout.flush()
+        except:
+            pass
 
     def load_default_bindings(self):
-        self._key_bindings.clear()
+        self._normal_key_bindings.clear()
 
-        self._key_bindings.update({
-            key.TAB: self._handle_complete,
-            key.UP: self._handle_history_previous,
-            key.DOWN: self._handle_history_next,
-            key.PAGE_UP: self._handle_history_start,
-            key.PAGE_DOWN: self._handle_history_end,
-            key.INSERT: self._handle_insert_replace,
-            key.DELETE: self._handle_delete,
-            key.BACKSPACE: self._handle_backspace,
-            key.HOME: self._handle_line_start,
-            key.END: self._handle_line_end,
-            key.LEFT: self._handle_line_left,
-            key.RIGHT: self._handle_line_right,
-            key.CTRL_A: self._handle_line_start,
-            key.CTRL_E: self._handle_line_end,
-            key.CTRL_L: self._handle_line_clear,
-            key.CTRL_C: self._handle_keyboard_interrupt,
-            key.CTRL_D: self._handle_line_eof,
-            key.LF: self._handle_newline,
-            key.CR: self._handle_cr,
-            key.CTRL_B: self._handle_toggle_bell,
+        self._normal_key_bindings.update({
+            key.TAB: "complete",
+            key.UP: "history-previous",
+            key.DOWN: "history-next",
+            key.PAGE_UP: "history-first",
+            key.PAGE_DOWN: "history-last",
+            key.INSERT: "toggle-insert-replace",
+            key.DELETE: "delete",
+            key.BACKSPACE: "backspace",
+            key.HOME: "goto-line-start",
+            key.END: "goto-line-end",
+            key.LEFT: "goto-line-left",
+            key.RIGHT: "goto-line-right",
+            key.CTRL_A: "goto-line-start",
+            key.CTRL_E: "goto-line-end",
+            key.CTRL_L: "line-clear",
+            key.CTRL_C: "line-cancel",
+            key.CTRL_D: "line-eof",
+            key.LF: "newline",
+            key.CR: "carriage-return",
+            key.CTRL_B: "toggle-bell",
+            key.CTRL_R: "open-reverse-lookup",
+        })
+
+        self._lookup_key_bindings.clear()
+        self._lookup_key_bindings.update({
+            key.TAB: "none",
+            key.ESC: "cancel-lookup-result",
+            key.LF: "forward-lookup-result",
+            key.CR: "forward-lookup-result",
+            key.TAB: "forward-lookup-result",
+            key.RIGHT: "forward-lookup-result",
+            key.LEFT: "forward-lookup-result",
+            key.UP: "forward-lookup-result",
+            key.DOWN: "forward-lookup-result",
+            key.PAGE_UP: "forward-lookup-result",
+            key.PAGE_DOWN: "forward-lookup-result",
+            key.INSERT: "forward-lookup-result",
+            key.DELETE: "forward-lookup-result",
+            key.CTRL_R: "lookup-back",
+            key.CTRL_S: "lookup-forward",
+            key.BACKSPACE: "lookup-backspace",
         })
 
     def get_completer(self):
         return self._completer
 
-    def _handle_cr(self, ch):
+    def _handle_nop(self, ch, **kwargs): # noqa
+        return False, False, None
+
+    def _handle_cr(self, ch, **kwargs): # noqa
         return self._handle_newline(ch)
 
-    def _handle_newline(self, ch):
+    def _handle_newline(self, ch, **kwargs): # noqa
         self._stdout.write("\r\n")
         self._stdout.flush()
         return True, self._line_buffer
 
-    def _handle_delete(self, ch):
+    def _handle_delete(self, ch, **kwargs): # noqa
         if self._caret_pos < len(self._line_buffer):
             self.clear_trailing_string()
             if self._caret_pos < len(self._line_buffer) - 1:
                 trailing_part = self._line_buffer[self._caret_pos + 1:]
             else:
                 trailing_part = ""
-            self._stdout.write(trailing_part + " ")
+            self.write(trailing_part)
+            self._stdout.write(" ")
             self._stdout.write("\b" * (len(trailing_part) + 1))
             self._stdout.flush()
             self._line_buffer = self._line_buffer[:self._caret_pos - len(self._line_buffer)] + trailing_part
@@ -154,12 +175,14 @@ class NessaidReadline():
             self.play_bell()
         return False, None
 
-    def _handle_backspace(self, ch):
+    def _handle_backspace(self, ch, **kwargs): # noqa
         if self._caret_pos:
             trailing_buf = self._line_buffer[self._caret_pos:]
             if trailing_buf:
                 self.clear_trailing_string()
-            self._stdout.write("\b \b" + trailing_buf + "\b" * len(trailing_buf))
+            self._stdout.write("\b \b")
+            self.write(trailing_buf)
+            self._stdout.write("\b" * len(trailing_buf))
             self._stdout.flush()
             self._caret_pos -= 1;
             self._line_buffer = self._line_buffer[:-len(trailing_buf) - 1] + trailing_buf
@@ -168,7 +191,7 @@ class NessaidReadline():
 
         return False, None
 
-    def _handle_history_previous(self, ch):
+    def _handle_history_previous(self, ch, **kwargs): # noqa
         if not self._bare_input:
 
             if self._history_index is None:
@@ -210,7 +233,7 @@ class NessaidReadline():
             t = 2
         self._bell_silence_time = t
 
-    def _handle_history_next(self, ch):
+    def _handle_history_next(self, ch, **kwargs): # noqa
         if not self._bare_input:
             if self._history_index is None:
                 self._history_index = len(self._history)
@@ -231,7 +254,7 @@ class NessaidReadline():
 
         return False, None
 
-    def _handle_line_left(self, ch):
+    def _handle_line_left(self, ch, **kwargs): # noqa
         if self._line_buffer and self._caret_pos:
             self._stdout.write("\b")
             self._stdout.flush()
@@ -240,16 +263,15 @@ class NessaidReadline():
             self.play_bell()
         return False, None
 
-    def _handle_line_right(self, ch):
+    def _handle_line_right(self, ch, **kwargs): # noqa
         if self._line_buffer and self._caret_pos < len(self._line_buffer):
-            self._stdout.write(self._line_buffer[self._caret_pos])
-            self._stdout.flush()
+            self.write(self._line_buffer[self._caret_pos])
             self._caret_pos += 1
         else:
             self.play_bell()
         return False, None
 
-    def _handle_line_start(self, ch):
+    def _handle_line_start(self, ch, **kwargs): # noqa
         if not self._line_buffer or not self._caret_pos:
             self.play_bell()
             return False, None
@@ -258,18 +280,17 @@ class NessaidReadline():
         self._caret_pos = 0
         return False, None
 
-    def _handle_line_end(self, ch):
+    def _handle_line_end(self, ch, **kwargs): # noqa
         if not self._line_buffer or self._caret_pos == len(self._line_buffer):
             self.play_bell()
             return False, None
         if self._caret_pos < len(self._line_buffer):
             trailing_buf = self._line_buffer[self._caret_pos:]
-            self._stdout.write(trailing_buf)
-            self._stdout.flush()
+            self.write(trailing_buf)
             self._caret_pos = len(self._line_buffer)
         return False, None
 
-    def _handle_line_clear(self, ch):
+    def _handle_line_clear(self, ch, **kwargs): # noqa
         if self._line_buffer:
             if self._caret_pos < len(self._line_buffer):
                 trailing_buf = self._line_buffer[self._caret_pos:]
@@ -283,23 +304,17 @@ class NessaidReadline():
             self.play_bell()
         return False, None
 
-    def _handle_keyboard_interrupt(self, ch):
+    def _handle_keyboard_interrupt(self, ch, **kwargs): # noqa
         self._stdout.write("\r\n")
         self._stdout.flush()
         raise NessaidReadlineKeyboadInterrupt()
 
-    def _handle_line_eof(self, ch):
+    def _handle_line_eof(self, ch, **kwargs): # noqa
         self._stdout.write("\r\n")
         self._stdout.flush()
         raise NessaidReadlineEOF()
 
-    def _handle_history_lookup_back(self, ch):
-        return False, None
-
-    def _handle_history_lookup_forward(self, ch):
-        return False, None
-
-    def _handle_complete(self, ch):
+    def _handle_complete(self, ch, **kwargs): # noqa
         if self._completing:
             return None
 
@@ -339,11 +354,11 @@ class NessaidReadline():
         self._completing = False
         return False, None
 
-    def _handle_escape(self, ch):
+    def _handle_escape(self, ch, **kwargs): # noqa
         self.play_bell()
         return False, None
 
-    def _handle_history_start(self, ch):
+    def _handle_history_start(self, ch, **kwargs): # noqa
         if not self._bare_input:
             if self._history:
                 if self._input_backup is None:
@@ -359,7 +374,7 @@ class NessaidReadline():
                 self.play_bell()
         return False, None
 
-    def _handle_history_end(self, ch):
+    def _handle_history_end(self, ch, **kwargs): # noqa
         if not self._bare_input:
             if self._history:
                 if self._input_backup is None:
@@ -375,17 +390,207 @@ class NessaidReadline():
                 self.play_bell()
         return False, None
 
-    def _handle_insert_replace(self, ch):
+    def _handle_insert_replace(self, ch, **kwargs): # noqa
         self._replace_mode = not self._replace_mode
         return False, None
 
-    def _handle_toggle_bell(self, ch):
+    def _handle_toggle_bell(self, ch, **kwargs): # noqa
         self._enable_bell = not self._enable_bell
         self._stdout.write("\a")
         if self._enable_bell:
             self._stdout.write("\a")
         self._stdout.flush()
         return False, None
+
+    def _init_lookup_state(self):
+        self._lookup_string = ""
+        self._lookup_direction = "back"
+        self._lookup_index = len(self._history)
+
+        self._current_lookup_match = None
+        self._previous_lookup_match = ""
+        self._current_lookup_indices = []
+        self._current_match_index = 0
+        self._lookup_failed = True
+
+    def _handle_reverse_lookup(self, ch, **kwargs): # noqa
+
+        if self._bare_input:
+            return False, None
+
+        self._init_lookup_state()
+
+        if self._line_buffer:
+            self._lookup_string = self._line_buffer
+
+        self._input_backup = self._line_buffer
+
+        line_len = len(self._input_prompt) + len(self._line_buffer)
+
+        while True:
+
+            if self._lookup_string:
+
+                if self._current_lookup_match:
+                    if self._lookup_direction == "forward":
+                        if self._current_match_index < len(self._current_lookup_indices) - 1:
+                            self._current_match_index += 1
+                        else:
+                            self._current_lookup_match = None
+                            self._lookup_index += 1
+                    else:
+                        if self._current_match_index > 0:
+                            self._current_match_index -= 1
+                        else:
+                            self._current_lookup_match = None
+                            self._lookup_index -= 1
+                else:
+                    if self._lookup_direction == "forward":
+                        if self._lookup_index < len(self._history):
+                            self._lookup_index += 1
+                        else:
+                            self._lookup_failed = True
+                    else:
+                        if self._lookup_index >= 0:
+                            self._lookup_index -= 1
+                        else:
+                            self._lookup_failed = True
+
+                if not self._current_lookup_match:
+                    if self._lookup_index >= 0 and self._lookup_index < len(self._history):
+                        cur_line = self._history[self._lookup_index]
+                        lookup_string = self._lookup_string.replace("\\", "\\\\")
+                        self._current_lookup_indices = [m.start() for m in re.finditer(lookup_string, cur_line)]
+                        if len(self._current_lookup_indices) :
+                            self._current_lookup_match = self._previous_lookup_match = cur_line
+                            self._lookup_failed = False
+                            if self._lookup_direction == "forward":
+                                self._current_match_index = 0
+                            else:
+                                self._current_match_index = len(self._current_lookup_indices) - 1
+                        else:
+                            self._current_lookup_match = None
+                            continue
+                    else:
+                        self._lookup_failed = True
+
+            lookup_prompt = "({failed}reverse-i-search`{lookup_str}'): {previous_match}".format(
+                failed = "failed " if self._lookup_failed else "",
+                lookup_str=self._lookup_string,
+                previous_match=self._previous_lookup_match
+            )
+
+            self._suppress_bell = True
+            self._handle_line_end("")
+            self._stdout.write("\b" * line_len)
+            self._stdout.write(" " * line_len)
+            self._stdout.write("\b" * line_len)
+            self._stdout.write(lookup_prompt)
+            line_len = len(lookup_prompt)
+            try:
+                if self._current_lookup_indices:
+                    caret_position = len(self._previous_lookup_match) - self._current_lookup_indices[self._current_match_index]
+                else:
+                    caret_position = len(self._previous_lookup_match)
+                self._stdout.write("\b" * caret_position)
+            except:
+                pass
+            self._stdout.flush()
+
+            while True:
+                ch = readkey.readkey(self._stdin)
+                if ch in self._lookup_key_bindings:
+                    key_binding = self._lookup_key_bindings[ch]
+                    key_handler = self._op_bindings[key_binding]
+                    status, ret_status, ret = key_handler(ch)
+                    if status:
+                        return ret_status, ret
+                    else:
+                        break
+                elif self.is_printable(ch):
+                    self._lookup_putchar(ch)
+                    break
+                else:
+                    continue
+
+        return False, None
+
+    def _handle_lookup_result(self, ch, **kwargs): # noqa
+
+        lookup_prompt = "({failed}reverse-i-search`{lookup_str}'): {previous_match}".format(
+            failed = "failed " if self._lookup_failed else "",
+            lookup_str=self._lookup_string,
+            previous_match=self._previous_lookup_match
+        )
+
+        try:
+            caret_position = len(self._previous_lookup_match) - self._current_lookup_indices[self._current_match_index]
+        except:
+            caret_position = 0
+        prompt_len = len(lookup_prompt)
+
+        self._stdout.write("\b" * (prompt_len - caret_position))
+        self._stdout.write(" " * prompt_len)
+        self._stdout.write("\b" * prompt_len)
+
+        self.print_prompt(self._input_prompt)
+        self._caret_pos = 0
+        self._line_buffer = ""
+        self.insert_text(self._previous_lookup_match)
+
+        if ch in self._normal_key_bindings:
+            key_handler = self._op_bindings[self._normal_key_bindings[ch]]
+            if key_handler != self._handle_complete:
+                self._last_completion = None
+            self._history_index = self._lookup_index
+            return (True,) + key_handler(ch)
+
+        return True, False, None
+
+    def _handle_cancel_lookup_result(self, ch, **kwargs): # noqa
+
+        lookup_prompt = "({failed}reverse-i-search`{lookup_str}'): {previous_match}".format(
+            failed = "failed " if self._lookup_failed else "",
+            lookup_str=self._lookup_string,
+            previous_match=self._previous_lookup_match
+        )
+
+        try:
+            caret_position = len(self._previous_lookup_match) - self._current_lookup_indices[self._current_match_index]
+        except:
+            caret_position = 0
+        prompt_len = len(lookup_prompt)
+
+        self._stdout.write("\b" * (prompt_len - caret_position))
+        self._stdout.write(" " * prompt_len)
+        self._stdout.write("\b" * prompt_len)
+
+        self.print_prompt(self._input_prompt)
+        self._caret_pos = 0
+        self._line_buffer = ""
+        self.insert_text(self._input_backup)
+        self._input_backup = None
+        self._lookup_index = len(self._history)
+        return True, False, None
+
+    def _handle_lookup_backspace(self, ch, **kwargs): # noqa
+        lookup_str = self._lookup_string
+        self._init_lookup_state()
+        self._lookup_string = lookup_str[:-1]
+        return False, False, None
+
+    def _lookup_putchar(self, ch, **kwargs): # noqa
+        lookup_str = self._lookup_string
+        self._init_lookup_state()
+        self._lookup_string = lookup_str + ch
+
+    def _handle_history_lookup_back(self, ch, **kwargs): # noqa
+        self._lookup_direction = "back"
+        return False, False, None
+
+    def _handle_history_lookup_forward(self, ch, **kwargs): # noqa
+        self._lookup_direction = "forward"
+        return False, False, None
 
     def set_completer(self, completer):
         self._completer = completer
@@ -401,7 +606,7 @@ class NessaidReadline():
             op = None
 
         if key and op and key in SPECIAL_KEY_MAP and op in self._op_bindings:
-            self._key_bindings[SPECIAL_KEY_MAP[key]] = self._op_bindings[op]
+            self._normal_key_bindings[SPECIAL_KEY_MAP[key]] = op
 
     def insert_text(self, text):
         self._suppress_bell = True
@@ -411,8 +616,8 @@ class NessaidReadline():
 
     def send(self, text):
         for ch in text:
-            if ch in self._key_bindings:
-                key_handler = self._key_bindings[ch]
+            if ch in self._normal_key_bindings:
+                key_handler = self._op_bindings[self._normal_key_bindings[ch]]
                 try:
                     key_handler(ch)
                 except Exception as e:
@@ -436,15 +641,14 @@ class NessaidReadline():
             self._stdout.write("\b" * len(trailing_buf))
             self._stdout.flush()
 
-    def _putchar(self, ch): # noqa
-        print_ch = "*" if self._mask_input else ch
+    def _putchar(self, ch, **kwargs): # noqa
         trailing_buf = self._line_buffer[self._caret_pos:] if self._caret_pos < len(self._line_buffer) else ""
         if self._replace_mode:
             if trailing_buf:
                 self._line_buffer = self._line_buffer[:-len(trailing_buf)] + ch + trailing_buf[1:]
             else:
                 self._line_buffer += ch
-            self._stdout.write(print_ch)
+            self.write(ch)
         else:
             if trailing_buf:
                 self.clear_trailing_string()
@@ -455,7 +659,8 @@ class NessaidReadline():
                     self._line_buffer += ch
             else:
                 self._line_buffer = ch
-            self._stdout.write(print_ch + trailing_buf + "\b" * len(trailing_buf))
+            self.write(ch + trailing_buf)
+            self._stdout.write("\b" * len(trailing_buf))
         self._stdout.flush()
         self._caret_pos += 1
 
@@ -495,7 +700,7 @@ class NessaidReadline():
         self.print_prompt(prompt)
         self._caret_pos = 0
         self._line_buffer = ""
-        if bare_input:
+        if bare_input or mask_input:
             self._input_history = False
         else:
             self._input_history = self._enable_history
@@ -512,8 +717,8 @@ class NessaidReadline():
                     self._add_to_history(self._line_buffer)
                     return self._line_buffer
 
-                if ch in self._key_bindings:
-                    key_handler = self._key_bindings[ch]
+                if ch in self._normal_key_bindings:
+                    key_handler = self._op_bindings[self._normal_key_bindings[ch]]
                     if key_handler != self._handle_complete:
                         self._last_completion = None
                     res, ret = key_handler(ch)

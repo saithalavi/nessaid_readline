@@ -27,6 +27,13 @@ class TestCmd(NessaidCmd):
     def print(self, *args):
         print("External function:", *args)
 
+    def do_input(self):
+        r"""
+        "input"
+        """
+        inp = self.input("python: ", show_char=False)
+        print("Python Code Input:", inp)
+
     def do_command1(self, number):
         r"""
         "command\n1"
@@ -106,6 +113,9 @@ class TestCmd(NessaidCmd):
 
 if __name__ == '__main__':
     cmd = TestCmd(prompt="nessaid-cmd # ", show_grammar=True)
+    cmd._cli_readline.parse_and_bind("ctrl-l:goto-line-start")
+    cmd._cli_readline.parse_and_bind("ctrl-u:open-reverse-lookup")
+    cmd._cli_readline.parse_and_bind("esc:line-eof")
     #show_grammar will print the generated grammar specification
     try:
         cmd.loop.run_until_complete(cmd.cmdloop(intro="Starting Nessaid CMD Demo"))
