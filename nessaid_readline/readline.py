@@ -429,6 +429,9 @@ class NessaidReadline():
 
         while True:
 
+            if not self._line_buffer:
+                self._lookup_failed = False
+
             if self._lookup_string:
 
                 if self._current_lookup_match:
