@@ -10,8 +10,10 @@ from nessaid_readline.readkey import readkey
 
 
 def main():
-    print("Press 'q' to exit")
-    key_map = {getattr(key, item): item for item in dir(key) if not item.startswith("_")}
+    print("Readkey test. Press 'q' to exit")
+
+    key_map = {getattr(key, item): item for item in dir(key) if not item.startswith("_") and item not in ['KEY_NAME_MAP']}
+
 
     while True:
         ch = readkey()
