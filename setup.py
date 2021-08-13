@@ -38,7 +38,7 @@ install_requires = [
 
 setup(
     name=pkg_name,
-    version='0.2.0',
+    version='0.2.1',
     url='https://github.com/saithalavi/nessaid_readline',
     description="Nessaid's readkey tool",
     long_description=long_description,
