@@ -180,10 +180,9 @@ elif sys.platform in ("win32", "cygwin"):
                     pass
                 return x
             else:
-                try:
+                if a in xlate_dict:
                     return xlate_dict[a]
-                except KeyError:
-                    return ch.decode()
+                return ch.decode()
         except Exception as e:
             raise e
 else:

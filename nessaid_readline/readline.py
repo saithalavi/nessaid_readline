@@ -194,7 +194,7 @@ class NessaidReadline():
     def _handle_history_previous(self, ch, **kwargs): # noqa
         if not self._bare_input:
 
-            if self._history_index is None:
+            if self._history_index is None or self._history_index < 0:
                 self._history_index = len(self._history)
 
             if self._input_backup is None:
@@ -539,7 +539,10 @@ class NessaidReadline():
         self.print_prompt(self._input_prompt)
         self._caret_pos = 0
         self._line_buffer = ""
-        self.insert_text(self._previous_lookup_match)
+        if not self._previous_lookup_match:
+            self.insert_text(self._lookup_string)
+        else:
+            self.insert_text(self._previous_lookup_match)
 
         if ch in self._normal_key_bindings:
             key_handler = self._op_bindings[self._normal_key_bindings[ch]]
