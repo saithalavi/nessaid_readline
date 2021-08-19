@@ -204,8 +204,10 @@ class NessaidReadline():
                 self._history_index -= 1
                 if len(self._history) > self._history_index:
                     history_line = self._history[self._history_index]
+                    self._suppress_bell = True
                     self._handle_line_clear("")
                     self.insert_text(history_line)
+                    self._suppress_bell = False
                 else:
                     self.play_bell()
             else:
@@ -243,14 +245,18 @@ class NessaidReadline():
                 self._history_index += 1
             if self._history_index < len(self._history):
                 history_line = self._history[self._history_index]
+                self._suppress_bell = True
                 self._handle_line_clear("")
                 self.insert_text(history_line)
+                self._suppress_bell = False
             elif self._input_backup == self._line_buffer:
                 self.play_bell()
             elif self._input_backup is not None:
+                self._suppress_bell = True
                 self._handle_line_clear("")
                 self.insert_text(self._input_backup)
                 self._input_backup = None
+                self._suppress_bell = False
 
         return False, None
 
@@ -366,10 +372,12 @@ class NessaidReadline():
                 if self._history_index == 0:
                     self.play_bell()
                 else:
+                    self._suppress_bell = True
                     self._history_index = 0
                     history_line = self._history[0]
                     self._handle_line_clear("")
                     self.insert_text(history_line)
+                    self._suppress_bell = False
             else:
                 self.play_bell()
         return False, None
@@ -382,10 +390,12 @@ class NessaidReadline():
                 if self._history_index == len(self._history):
                     self.play_bell()
                 else:
+                    self._suppress_bell = True
                     self._history_index = len(self._history)
                     self._handle_line_clear("")
                     self.insert_text(self._input_backup)
                     self._input_backup = None
+                    self._suppress_bell = False
             else:
                 self.play_bell()
         return False, None
