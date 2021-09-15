@@ -6,6 +6,7 @@
 #
 
 import sys
+import time
 
 import nessaid_readline.key as key
 
@@ -23,8 +24,8 @@ if sys.platform.startswith("linux") or sys.platform == "darwin":
     import os
     import tty # noqa
     import select # noqa
-    import termios # noqa
-    import fcntl # noqa
+    import termios # pylint: disable=import-error
+    import fcntl # pylint: disable=import-error
 
 
     def _setup_tty(stdin):
@@ -43,92 +44,109 @@ if sys.platform.startswith("linux") or sys.platform == "darwin":
         except Exception:
             pass
 
+    def _sequence_from_input_data(chars, single_char=False):
+        sequence = []
+        while chars:
+            if single_char is True and sequence:
+                return sequence
+
+            c1 = chars[0]
+            chars = chars[1:]
+            if ord(c1) != 0x1B:
+                sequence.append(c1)
+                continue
+
+            if not chars:
+                sequence.append(c1)
+                break
+
+            c2 = chars[0]
+            chars = chars[1:]
+            if c2:
+                if ord(c2) not in [0x5B, 0x4f]:
+                    sequence.append(c1 + c2)
+                    continue
+            else:
+                sequence.append(c1)
+                break
+
+            if not chars:
+                break
+
+            c3 = chars[0]
+            chars = chars[1:]
+            if c3:
+                if ord(c3) not in [0x31, 0x32, 0x33, 0x34, 0x35, 0x36]:
+                    sequence.append(c1 + c2 + c3)
+                    continue
+            else:
+                sequence.append(c1 + c2)
+                break
+
+            if not chars:
+                break
+
+            c4 = chars[0]
+            chars = chars[1:]
+            if c4:
+                sequence.append(c1 + c2 + c3 + c4)
+                continue
+            else:
+                sequence.append(c1 + c2 + c3)
+                break
+        return sequence
+
+
     try:
         select.epoll # noqa
     except AttributeError:
 
-        def _read_sequence(stdin):
+        def _read_sequence(stdin, single_char=False):
+
             try:
                 old_settings = _setup_tty(stdin)
                 fd = stdin.fileno()
                 fl = fcntl.fcntl(fd, fcntl.F_GETFL)
-                fcntl.fcntl(fd, fcntl.F_SETFL, fl | os.O_NONBLOCK) # noqa
+                fcntl.fcntl(fd, fcntl.F_SETFL, fl | os.O_NONBLOCK) # pylint: disable=maybe-no-member
 
                 inputready, _, exceptready = select.select([fd], [], [])
+
                 if fd in exceptready:
                     raise ReadKeyError("Exception in stdin FD")
+
                 if fd in inputready:
-                    c1 = stdin.read(1)
-                    if ord(c1) != 0x1B:
-                        return c1
-                else:
-                    raise ReadKeyError("Select call returned without data")
+                    chars = stdin.read()
+                    if chars:
+                        return _sequence_from_input_data(chars, single_char=single_char)
 
-                c2 = stdin.read(1)
-                if c2:
-                    if ord(c2) not in [0x5B, 0x4f]:
-                        return c1 + c2
-                else:
-                    return c1
+                raise ReadKeyError("Select call returned without data")
 
-                c3 = stdin.read(1)
-                if c3:
-                    if ord(c3) not in [0x31, 0x32, 0x33, 0x34, 0x35, 0x36]:
-                        return c1 + c2 + c3
-                else:
-                    return c1 + c2
-
-                c4 = stdin.read(1)
-                if c4:
-                    return c1 + c2 + c3 + c4
-                else:
-                    return c1 + c2 + c3
             except Exception as e:
                 raise e
             finally:
                 fcntl.fcntl(fd, fcntl.F_SETFL, fl)
                 _restore_tty(stdin, old_settings)
+
     else:
 
-        def _read_sequence(stdin):
+        def _read_sequence(stdin, single_char=False):
+
             try:
                 old_settings = _setup_tty(stdin)
                 fd = stdin.fileno()
                 fl = fcntl.fcntl(fd, fcntl.F_GETFL)
-                fcntl.fcntl(fd, fcntl.F_SETFL, fl | os.O_NONBLOCK) # noqa
-                epoll = select.epoll() # noqa
-                epoll.register(fd, select.EPOLLIN) # noqa
+                fcntl.fcntl(fd, fcntl.F_SETFL, fl | os.O_NONBLOCK) # pylint: disable=maybe-no-member
+                epoll = select.epoll() # pylint: disable=maybe-no-member
+                epoll.register(fd, select.EPOLLIN) # pylint: disable=maybe-no-member
 
                 while True:
                     events = epoll.poll(10)
-                    if (fd, select.EPOLLIN) in events: # noqa
-                        c1 = stdin.read(1)
-                        if c1:
-                            if ord(c1) != 0x1B:
-                                return c1
-                            break
-                        else:
+                    if (fd, select.EPOLLIN) in events: # pylint: disable=maybe-no-member
+                        chars = stdin.read()
+                        if not chars:
                             raise ReadKeyError("Epoll returned empty")
 
-                c2 = stdin.read(1)
-                if c2:
-                    if ord(c2) not in [0x5B, 0x4f]:
-                        return c1 + c2
-                else:
-                    return c1
-
-                c3 = stdin.read(1)
-                if c3:
-                    if ord(c3) not in [0x31, 0x32, 0x33, 0x34, 0x35, 0x36]:
-                        return c1 + c2 + c3
-                else:
-                    return c1 + c2
-
-                c4 = stdin.read(1)
-                if c4:
-                    return c1 + c2 + c3 + c4
-                else:
-                    return c1 + c2 + c3
+                        return _sequence_from_input_data(chars, single_char=single_char)
 
             except Exception as e:
                 raise e
@@ -142,13 +160,22 @@ if sys.platform.startswith("linux") or sys.platform == "darwin":
     def readkey(stdin=None):
         if not stdin:
             stdin = sys.stdin
+        try:
+            return _read_sequence(stdin, single_char=True)[0]
+        except Exception as e:
+            raise e
 
+
+    def readkeys(stdin=None):
+        if not stdin:
+            stdin = sys.stdin
         try:
             return _read_sequence(stdin)
         except Exception as e:
             raise e
 
 elif sys.platform in ("win32", "cygwin"):
+
     import msvcrt # noqa
 
     xlate_dict = {
@@ -166,6 +193,7 @@ elif sys.platform in ("win32", "cygwin"):
         19424: key.LEFT,
         19936: key.RIGHT,
     }
+
 
     def readkey(stdin=None): # noqa
         try:
@@ -185,5 +213,15 @@ elif sys.platform in ("win32", "cygwin"):
                 return ch.decode()
         except Exception as e:
             raise e
+
+
+    def readkeys(stdin=None):
+        sequence = []
+        while not msvcrt.kbhit():
+            time.sleep(.001)
+        while msvcrt.kbhit():
+            sequence.append(readkey(stdin=stdin))
+        return sequence
+
 else:
     raise PlatformNotSupported(sys.platform)

@@ -28,6 +28,7 @@ SPECIAL_KEY_MAP = key.KEY_NAME_MAP
 class NessaidReadline():
 
     def __init__(self, stdin=None, stdout=None, stderr=None, history_size=100):
+        self._readbuf = []
         self._stdin = stdin or sys.stdin
         self._stdout = stdout or sys.stdout
         self._stderr = stderr or sys.stderr
@@ -184,7 +185,7 @@ class NessaidReadline():
             self.write(trailing_buf)
             self._stdout.write("\b" * len(trailing_buf))
             self._stdout.flush()
-            self._caret_pos -= 1;
+            self._caret_pos -= 1
             self._line_buffer = self._line_buffer[:-len(trailing_buf) - 1] + trailing_buf
         else:
             self.play_bell()
@@ -511,7 +512,7 @@ class NessaidReadline():
             self._stdout.flush()
 
             while True:
-                ch = readkey.readkey(self._stdin)
+                ch = self.readchar()
                 if ch in self._lookup_key_bindings:
                     key_binding = self._lookup_key_bindings[ch]
                     key_handler = self._op_bindings[key_binding]
@@ -711,6 +712,19 @@ class NessaidReadline():
                 while len(self._history) > self._history_size:
                     self._history.pop(0)
 
+    def readchar(self):
+        if self._readbuf:
+            return self._readbuf.pop(0)
+        else:
+            self._readbuf = readkey.readkeys(self._stdin)
+            return self._readbuf.pop(0)
+
+    def flush(self):
+        """"
+        Flushes the cached input data
+        """
+        self._readbuf = []
+
     def _input(self, prompt, mask_input=False, bare_input=False):
 
         self.print_prompt(prompt)
@@ -728,7 +742,7 @@ class NessaidReadline():
 
             while True:
                 try:
-                    ch = readkey.readkey(self._stdin)
+                    ch = self.readchar()
                 except Exception as e: # noqa
                     self._add_to_history(self._line_buffer)
                     return self._line_buffer

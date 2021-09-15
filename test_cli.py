@@ -13,6 +13,7 @@ from nessaid_cli.tokens import (
     RangedStringToken
 )
 
+
 class TestCmd(NessaidCmd):
     r"""
     token TEST_NUMBER RangedIntToken(1, 100); // Token to match integer between 1 and 100
@@ -82,7 +83,7 @@ class TestCmd(NessaidCmd):
             call print("Input number:", $2);
         >>
         """
-        print("Input str is:", string);
+        print("Input str is:", string)
 
     def do_command3(self, string, number, numbers):
         r"""
@@ -106,9 +107,9 @@ class TestCmd(NessaidCmd):
             ) * (1:3)
         }
         """
-        print("Input str is:", string);
-        print("Input number is:", number);
-        print("Input list is:", numbers);
+        print("Input str is:", string)
+        print("Input number is:", number)
+        print("Input list is:", numbers)
 
 
 if __name__ == '__main__':

@@ -19,7 +19,19 @@ install_packages = [pkg_name] + [pkg_name + "." + sub_pkg for sub_pkg in sub_pac
 clanup_dirs = ['build', 'dist', pkg_name + '.egg-info']
 
 
+def rm_pycache(directory):
+    dir_content = os.listdir(directory)
+    for item in dir_content:
+        cdir = os.path.join(directory, item)
+        if os.path.isdir(cdir):
+            if item == '__pycache__':
+                print("removing dir:", cdir)
+                shutil.rmtree(cdir)
+            else:
+                rm_pycache(cdir)
+
 def do_cleanup_fixes():
+    rm_pycache(".")
     dir_content = os.listdir()
     for d in clanup_dirs:
         if d in dir_content:
@@ -36,34 +48,36 @@ install_requires = [
     "asyncio"
 ]
 
-setup(
-    name=pkg_name,
-    version='0.2.2',
-    url='https://github.com/saithalavi/nessaid_readline',
-    description="Nessaid's readkey tool",
-    long_description=long_description,
-    author='Saithalavi M',
-    author_email='saithalavi@gmail.com',
-    packages=install_packages,
-    include_package_data=True,
-    install_requires=install_requires,
-    python_requires='>=3',
-    keywords='readkey readchar',
-    license='MIT',
-    classifiers=[
-        'Development Status :: 4 - Beta',
-        'Intended Audience :: Developers',
-        'Topic :: Software Development :: Libraries',
-        'Programming Language :: Python :: 3',
-        'License :: OSI Approved :: MIT License',
-    ],
-    project_urls = {
-        'Documentation': 'https://github.com/saithalavi/nessaid_readline/blob/master/README.md',
-        'Source': 'https://github.com/saithalavi/nessaid_readline',
-        'Tracker': 'https://github.com/saithalavi/nessaid_readline/issues',
-    },
-)
 
 if __name__ == '__main__':
+
+    setup(
+        name=pkg_name,
+        version='0.3.0',
+        url='https://github.com/saithalavi/nessaid_readline',
+        description="Nessaid's readkey tool",
+        long_description=long_description,
+        author='Saithalavi M',
+        author_email='saithalavi@gmail.com',
+        packages=install_packages,
+        include_package_data=True,
+        install_requires=install_requires,
+        python_requires='>=3',
+        keywords='readkey readchar',
+        license='MIT',
+        classifiers=[
+            'Development Status :: 4 - Beta',
+            'Intended Audience :: Developers',
+            'Topic :: Software Development :: Libraries',
+            'Programming Language :: Python :: 3',
+            'License :: OSI Approved :: MIT License',
+        ],
+        project_urls = {
+            'Documentation': 'https://github.com/saithalavi/nessaid_readline/blob/master/README.md',
+            'Source': 'https://github.com/saithalavi/nessaid_readline',
+            'Tracker': 'https://github.com/saithalavi/nessaid_readline/issues',
+        },
+    )
+
     if 'clean' in sys.argv and 'install' not in sys.argv:
         do_cleanup_fixes()

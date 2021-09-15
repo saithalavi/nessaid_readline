@@ -116,8 +116,6 @@ KEY_NAME_MAP = {
     "cr": CR,
     "lf": LF,
     "tab": TAB,
-    "up": UP,
-    "down": DOWN,
     "page-up": PAGE_UP,
     "page-down": PAGE_DOWN,
     "insert": INSERT,

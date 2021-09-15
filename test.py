@@ -7,13 +7,13 @@
 
 import nessaid_readline.key as key
 from nessaid_readline.readkey import readkey
+from nessaid_readline.readline import NessaidReadline
 
 
 def main():
-    print("Readkey test. Press 'q' to exit")
+    print("Readkey test. Press 'q' to stop")
 
     key_map = {getattr(key, item): item for item in dir(key) if not item.startswith("_") and item not in ['KEY_NAME_MAP']}
-
 
     while True:
         ch = readkey()
@@ -28,6 +28,16 @@ def main():
             print(ch.encode(), ch, end="\r\n")
         if ch == 'q':
             break
+
+    readline = NessaidReadline()
+    print("Readkey test. Type 'quit' to exit")
+
+    while True:
+        s = readline.readline("# ")
+        print(s)
+        if s == 'quit':
+            break
+
 
 if __name__ == '__main__':
     main()
