@@ -13,6 +13,7 @@ from setuptools import setup
 
 pkg_name = 'nessaid_readline'
 sub_packages = []
+VERSION = '0.4.0'
 
 install_packages = [pkg_name] + [pkg_name + "." + sub_pkg for sub_pkg in sub_packages]
 
@@ -53,7 +54,7 @@ if __name__ == '__main__':
 
     setup(
         name=pkg_name,
-        version='0.3.0',
+        version=VERSION,
         url='https://github.com/saithalavi/nessaid_readline',
         description="Nessaid's readkey tool",
         long_description=long_description,

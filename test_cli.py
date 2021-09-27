@@ -25,9 +25,6 @@ class TestCmd(NessaidCmd):
         It should return the list of token classes being used"""
         return [RangedIntToken, RangedStringToken]
 
-    def print(self, *args):
-        print("External function:", *args)
-
     def do_input(self):
         r"""
         "input"
@@ -114,15 +111,9 @@ class TestCmd(NessaidCmd):
 
 if __name__ == '__main__':
     cmd = TestCmd(prompt="nessaid-cmd # ", show_grammar=True)
-    cmd._cli_readline.parse_and_bind("ctrl-l:goto-line-start")
-    cmd._cli_readline.parse_and_bind("ctrl-u:open-reverse-lookup")
-    cmd._cli_readline.parse_and_bind("esc:line-eof")
+    cmd.readline.parse_and_bind("ctrl-l:goto-line-start")
+    cmd.readline.parse_and_bind("ctrl-u:open-reverse-lookup")
+    cmd.readline.parse_and_bind("esc:line-eof")
     #show_grammar will print the generated grammar specification
-    try:
-        cmd.loop.run_until_complete(cmd.cmdloop(intro="Starting Nessaid CMD Demo"))
-    except KeyboardInterrupt:
-        sys.exit(0)
-    except Exception as e:
-        cmd.error("Exception in cmdloop:", e)
-        sys.exit(1)
+    cmd.run(intro="Starting Nessaid CMD Demo")
     sys.exit(0)

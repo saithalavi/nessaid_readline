@@ -9,9 +9,41 @@ import re
 import sys
 import time
 import string
+import asyncio
+
+from concurrent.futures import ThreadPoolExecutor
 
 import nessaid_readline.key as key
 import nessaid_readline.readkey as readkey
+
+if sys.platform.startswith("linux") or sys.platform == "darwin":
+
+    import os
+    import tty # noqa
+    import select # noqa
+    import termios # pylint: disable=import-error
+    import fcntl # pylint: disable=import-error
+
+elif sys.platform in ("win32", "cygwin"):
+    import msvcrt # noqa
+
+    xlate_dict = {
+        8: key.BACKSPACE,
+        27: key.ESC,
+        7680: key.ALT_A,
+        21216: key.INSERT,
+        21472: key.DELETE,
+        18912: key.PAGE_UP,
+        20960: key.PAGE_DOWN,
+        18400: key.HOME,
+        20448: key.END,
+        18656: key.UP,
+        20704: key.DOWN,
+        19424: key.LEFT,
+        19936: key.RIGHT,
+    }
+else:
+    raise readkey.PlatformNotSupported(sys.platform)
 
 
 class NessaidReadlineEOF(Exception):
@@ -25,9 +57,12 @@ class NessaidReadlineKeyboadInterrupt(Exception):
 SPECIAL_KEY_MAP = key.KEY_NAME_MAP
 
 
-class NessaidReadline():
+class NessaidAsyncReadline():
 
-    def __init__(self, stdin=None, stdout=None, stderr=None, history_size=100):
+    EXECUTOR = ThreadPoolExecutor(max_workers=3)
+
+    def __init__(self, loop=None, stdin=None, stdout=None, stderr=None, history_size=100):
+        self._loop = loop or asyncio.get_event_loop()
         self._readbuf = []
         self._stdin = stdin or sys.stdin
         self._stdout = stdout or sys.stdout
@@ -91,6 +126,7 @@ class NessaidReadline():
         self._last_completion_linebuf = None
         self._init_lookup_state()
         self._keyboard_interrupted = False
+        self._executor = NessaidAsyncReadline.EXECUTOR
 
     def write(self, s):
         try:
@@ -101,7 +137,7 @@ class NessaidReadline():
             pass
 
     def handle_external_keyboard_interrupt(self):
-        pass
+        self._keyboard_interrupted = True
 
     def load_default_bindings(self):
         self._normal_key_bindings.clear()
@@ -153,18 +189,18 @@ class NessaidReadline():
     def get_completer(self):
         return self._completer
 
-    def _handle_nop(self, ch, **kwargs): # noqa
+    async def _handle_nop(self, ch, **kwargs): # noqa
         return False, False, None
 
-    def _handle_cr(self, ch, **kwargs): # noqa
-        return self._handle_newline(ch)
+    async def _handle_cr(self, ch, **kwargs): # noqa
+        return await self._handle_newline(ch)
 
-    def _handle_newline(self, ch, **kwargs): # noqa
+    async def _handle_newline(self, ch, **kwargs): # noqa
         self._stdout.write("\r\n")
         self._stdout.flush()
         return True, self._line_buffer
 
-    def _handle_delete(self, ch, **kwargs): # noqa
+    async def _handle_delete(self, ch, **kwargs): # noqa
         if self._caret_pos < len(self._line_buffer):
             self.clear_trailing_string()
             if self._caret_pos < len(self._line_buffer) - 1:
@@ -180,7 +216,7 @@ class NessaidReadline():
             self.play_bell()
         return False, None
 
-    def _handle_backspace(self, ch, **kwargs): # noqa
+    async def _handle_backspace(self, ch, **kwargs): # noqa
         if self._caret_pos:
             trailing_buf = self._line_buffer[self._caret_pos:]
             if trailing_buf:
@@ -196,7 +232,7 @@ class NessaidReadline():
 
         return False, None
 
-    def _handle_history_previous(self, ch, **kwargs): # noqa
+    async def _handle_history_previous(self, ch, **kwargs): # noqa
         if not self._bare_input:
 
             if self._history_index is None or self._history_index < 0:
@@ -210,8 +246,8 @@ class NessaidReadline():
                 if len(self._history) > self._history_index:
                     history_line = self._history[self._history_index]
                     self._suppress_bell = True
-                    self._handle_line_clear("")
-                    self.insert_text(history_line)
+                    await self._handle_line_clear("")
+                    await self.insert_text(history_line)
                     self._suppress_bell = False
                 else:
                     self.play_bell()
@@ -240,7 +276,7 @@ class NessaidReadline():
             t = 2
         self._bell_silence_time = t
 
-    def _handle_history_next(self, ch, **kwargs): # noqa
+    async def _handle_history_next(self, ch, **kwargs): # noqa
         if not self._bare_input:
             if self._history_index is None:
                 self._history_index = len(self._history)
@@ -251,21 +287,21 @@ class NessaidReadline():
             if self._history_index < len(self._history):
                 history_line = self._history[self._history_index]
                 self._suppress_bell = True
-                self._handle_line_clear("")
-                self.insert_text(history_line)
+                await self._handle_line_clear("")
+                await self.insert_text(history_line)
                 self._suppress_bell = False
             elif self._input_backup == self._line_buffer:
                 self.play_bell()
             elif self._input_backup is not None:
                 self._suppress_bell = True
-                self._handle_line_clear("")
-                self.insert_text(self._input_backup)
+                await self._handle_line_clear("")
+                await self.insert_text(self._input_backup)
                 self._input_backup = None
                 self._suppress_bell = False
 
         return False, None
 
-    def _handle_line_left(self, ch, **kwargs): # noqa
+    async def _handle_line_left(self, ch, **kwargs): # noqa
         if self._line_buffer and self._caret_pos:
             self._stdout.write("\b")
             self._stdout.flush()
@@ -274,7 +310,7 @@ class NessaidReadline():
             self.play_bell()
         return False, None
 
-    def _handle_line_right(self, ch, **kwargs): # noqa
+    async def _handle_line_right(self, ch, **kwargs): # noqa
         if self._line_buffer and self._caret_pos < len(self._line_buffer):
             self.write(self._line_buffer[self._caret_pos])
             self._caret_pos += 1
@@ -282,7 +318,7 @@ class NessaidReadline():
             self.play_bell()
         return False, None
 
-    def _handle_line_start(self, ch, **kwargs): # noqa
+    async def _handle_line_start(self, ch, **kwargs): # noqa
         if not self._line_buffer or not self._caret_pos:
             self.play_bell()
             return False, None
@@ -291,7 +327,7 @@ class NessaidReadline():
         self._caret_pos = 0
         return False, None
 
-    def _handle_line_end(self, ch, **kwargs): # noqa
+    async def _handle_line_end(self, ch, **kwargs): # noqa
         if not self._line_buffer or self._caret_pos == len(self._line_buffer):
             self.play_bell()
             return False, None
@@ -301,7 +337,7 @@ class NessaidReadline():
             self._caret_pos = len(self._line_buffer)
         return False, None
 
-    def _handle_line_clear(self, ch, **kwargs): # noqa
+    async def _handle_line_clear(self, ch, **kwargs): # noqa
         if self._line_buffer:
             if self._caret_pos < len(self._line_buffer):
                 trailing_buf = self._line_buffer[self._caret_pos:]
@@ -315,17 +351,17 @@ class NessaidReadline():
             self.play_bell()
         return False, None
 
-    def _handle_keyboard_interrupt(self, ch, **kwargs): # noqa
+    async def _handle_keyboard_interrupt(self, ch, **kwargs): # noqa
         self._stdout.write("\r\n")
         self._stdout.flush()
         raise NessaidReadlineKeyboadInterrupt()
 
-    def _handle_line_eof(self, ch, **kwargs): # noqa
+    async def _handle_line_eof(self, ch, **kwargs): # noqa
         self._stdout.write("\r\n")
         self._stdout.flush()
         raise NessaidReadlineEOF()
 
-    def _handle_complete(self, ch, **kwargs): # noqa
+    async def _handle_complete(self, ch, **kwargs): # noqa
         if self._completing:
             return None
 
@@ -336,7 +372,10 @@ class NessaidReadline():
             pre_complete_linebuf = self._line_buffer
 
             while True:
-                c = self._completer(self._line_buffer, index)
+                if asyncio.iscoroutinefunction(self._completer):
+                    c = await self._completer(self._line_buffer, index)
+                else:
+                    c = self._completer(self._line_buffer, index)
                 index += 1
                 if c is None:
                     break
@@ -365,11 +404,11 @@ class NessaidReadline():
         self._completing = False
         return False, None
 
-    def _handle_escape(self, ch, **kwargs): # noqa
+    async def _handle_escape(self, ch, **kwargs): # noqa
         self.play_bell()
         return False, None
 
-    def _handle_history_start(self, ch, **kwargs): # noqa
+    async def _handle_history_start(self, ch, **kwargs): # noqa
         if not self._bare_input:
             if self._history:
                 if self._input_backup is None:
@@ -380,14 +419,14 @@ class NessaidReadline():
                     self._suppress_bell = True
                     self._history_index = 0
                     history_line = self._history[0]
-                    self._handle_line_clear("")
-                    self.insert_text(history_line)
+                    await self._handle_line_clear("")
+                    await self.insert_text(history_line)
                     self._suppress_bell = False
             else:
                 self.play_bell()
         return False, None
 
-    def _handle_history_end(self, ch, **kwargs): # noqa
+    async def _handle_history_end(self, ch, **kwargs): # noqa
         if not self._bare_input:
             if self._history:
                 if self._input_backup is None:
@@ -397,19 +436,19 @@ class NessaidReadline():
                 else:
                     self._suppress_bell = True
                     self._history_index = len(self._history)
-                    self._handle_line_clear("")
-                    self.insert_text(self._input_backup)
+                    await self._handle_line_clear("")
+                    await self.insert_text(self._input_backup)
                     self._input_backup = None
                     self._suppress_bell = False
             else:
                 self.play_bell()
         return False, None
 
-    def _handle_insert_replace(self, ch, **kwargs): # noqa
+    async def _handle_insert_replace(self, ch, **kwargs): # noqa
         self._replace_mode = not self._replace_mode
         return False, None
 
-    def _handle_toggle_bell(self, ch, **kwargs): # noqa
+    async def _handle_toggle_bell(self, ch, **kwargs): # noqa
         self._enable_bell = not self._enable_bell
         self._stdout.write("\a")
         if self._enable_bell:
@@ -428,7 +467,7 @@ class NessaidReadline():
         self._current_match_index = 0
         self._lookup_failed = True
 
-    def _handle_reverse_lookup(self, ch, **kwargs): # noqa
+    async def _handle_reverse_lookup(self, ch, **kwargs): # noqa
 
         if self._bare_input:
             return False, None
@@ -499,7 +538,7 @@ class NessaidReadline():
             )
 
             self._suppress_bell = True
-            self._handle_line_end("")
+            await self._handle_line_end("")
             self._stdout.write("\b" * line_len)
             self._stdout.write(" " * line_len)
             self._stdout.write("\b" * line_len)
@@ -516,11 +555,11 @@ class NessaidReadline():
             self._stdout.flush()
 
             while True:
-                ch = self.readchar()
+                ch = await self.readchar()
                 if ch in self._lookup_key_bindings:
                     key_binding = self._lookup_key_bindings[ch]
                     key_handler = self._op_bindings[key_binding]
-                    status, ret_status, ret = key_handler(ch)
+                    status, ret_status, ret = await key_handler(ch)
                     if status:
                         return ret_status, ret
                     else:
@@ -533,7 +572,7 @@ class NessaidReadline():
 
         return False, None
 
-    def _handle_lookup_result(self, ch, **kwargs): # noqa
+    async def _handle_lookup_result(self, ch, **kwargs): # noqa
 
         lookup_prompt = "({failed}reverse-i-search`{lookup_str}'): {previous_match}".format(
             failed = "failed " if self._lookup_failed else "",
@@ -555,20 +594,20 @@ class NessaidReadline():
         self._caret_pos = 0
         self._line_buffer = ""
         if not self._previous_lookup_match:
-            self.insert_text(self._lookup_string)
+            await self.insert_text(self._lookup_string)
         else:
-            self.insert_text(self._previous_lookup_match)
+            await self.insert_text(self._previous_lookup_match)
 
         if ch in self._normal_key_bindings:
             key_handler = self._op_bindings[self._normal_key_bindings[ch]]
             if key_handler != self._handle_complete:
                 self._last_completion = None
             self._history_index = self._lookup_index
-            return (True,) + key_handler(ch)
+            return (True,) + await key_handler(ch)
 
         return True, False, None
 
-    def _handle_cancel_lookup_result(self, ch, **kwargs): # noqa
+    async def _handle_cancel_lookup_result(self, ch, **kwargs): # noqa
 
         lookup_prompt = "({failed}reverse-i-search`{lookup_str}'): {previous_match}".format(
             failed = "failed " if self._lookup_failed else "",
@@ -589,12 +628,12 @@ class NessaidReadline():
         self.print_prompt(self._input_prompt)
         self._caret_pos = 0
         self._line_buffer = ""
-        self.insert_text(self._input_backup)
+        await self.insert_text(self._input_backup)
         self._input_backup = None
         self._lookup_index = len(self._history)
         return True, False, None
 
-    def _handle_lookup_backspace(self, ch, **kwargs): # noqa
+    async def _handle_lookup_backspace(self, ch, **kwargs): # noqa
         lookup_str = self._lookup_string
         self._init_lookup_state()
         self._lookup_string = lookup_str[:-1]
@@ -605,11 +644,11 @@ class NessaidReadline():
         self._init_lookup_state()
         self._lookup_string = lookup_str + ch
 
-    def _handle_history_lookup_back(self, ch, **kwargs): # noqa
+    async def _handle_history_lookup_back(self, ch, **kwargs): # noqa
         self._lookup_direction = "back"
         return False, False, None
 
-    def _handle_history_lookup_forward(self, ch, **kwargs): # noqa
+    async def _handle_history_lookup_forward(self, ch, **kwargs): # noqa
         self._lookup_direction = "forward"
         return False, False, None
 
@@ -629,18 +668,18 @@ class NessaidReadline():
         if key and op and key in SPECIAL_KEY_MAP and op in self._op_bindings:
             self._normal_key_bindings[SPECIAL_KEY_MAP[key]] = op
 
-    def insert_text(self, text):
+    async def insert_text(self, text):
         self._suppress_bell = True
-        self._handle_line_end("")
-        self.send(text)
+        await self._handle_line_end("")
+        await self.send(text)
         self._suppress_bell = False
 
-    def send(self, text):
+    async def send(self, text):
         for ch in text:
             if ch in self._normal_key_bindings:
                 key_handler = self._op_bindings[self._normal_key_bindings[ch]]
                 try:
-                    key_handler(ch)
+                    await key_handler(ch)
                 except Exception as e:
                     if type(e) in [NessaidReadlineEOF, NessaidReadlineKeyboadInterrupt]:
                         continue
@@ -716,11 +755,14 @@ class NessaidReadline():
                 while len(self._history) > self._history_size:
                     self._history.pop(0)
 
-    def readchar(self):
+    async def readchar(self):
         if self._readbuf:
             return self._readbuf.pop(0)
         else:
-            self._readbuf = readkey.readkeys(self._stdin)
+            try:
+                self._readbuf = await self._loop.run_in_executor(self._executor, self.readkeys)
+            except KeyboardInterrupt:
+                self._readbuf.append(key.CTRL_C)
             return self._readbuf.pop(0)
 
     def flush(self):
@@ -729,7 +771,7 @@ class NessaidReadline():
         """
         self._readbuf = []
 
-    def _input(self, prompt, mask_input=False, bare_input=False):
+    async def _input(self, prompt, mask_input=False, bare_input=False):
 
         self.print_prompt(prompt)
         self._caret_pos = 0
@@ -746,7 +788,9 @@ class NessaidReadline():
 
             while True:
                 try:
-                    ch = self.readchar()
+                    ch = await self.readchar()
+                except KeyboardInterrupt:
+                    pass
                 except Exception as e: # noqa
                     self._add_to_history(self._line_buffer)
                     return self._line_buffer
@@ -755,7 +799,7 @@ class NessaidReadline():
                     key_handler = self._op_bindings[self._normal_key_bindings[ch]]
                     if key_handler != self._handle_complete:
                         self._last_completion = None
-                    res, ret = key_handler(ch)
+                    res, ret = await key_handler(ch)
                     self._add_to_history(ret)
                     if res is True:
                         return ret
@@ -778,8 +822,199 @@ class NessaidReadline():
             self._last_completion = None
             self._last_completion_linebuf = None
 
-    def input(self, prompt=None, mask_input=False):
-        return self._input(prompt or "", mask_input=mask_input, bare_input=True)
+    async def input(self, prompt=None, mask_input=False):
+        return await self._input(prompt or "", mask_input=mask_input, bare_input=True)
 
-    def readline(self, prompt=None):
-        return self._input(prompt or "", mask_input=False, bare_input=False)
+    async def readline(self, prompt=None):
+        inp = await self._input(prompt or "", mask_input=False, bare_input=False)
+        return inp
+
+    if sys.platform.startswith("linux") or sys.platform == "darwin":
+
+        def _setup_tty(self):
+            old_settings = None
+            try:
+                fd = self._stdin.fileno()
+                old_settings = termios.tcgetattr(fd) # pylint: disable=undefined-variable
+                tty.setraw(self._stdin.fileno()) # pylint: disable=undefined-variable
+            finally:
+                return old_settings
+
+        def _restore_tty(self, old_settings):
+            try:
+                fd = self._stdin.fileno()
+                termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+            except Exception:
+                pass
+
+        def _sequence_from_input_data(self, chars, single_char=False):
+            sequence = []
+            while chars:
+                if single_char is True and sequence:
+                    return sequence
+
+                c1 = chars[0]
+                chars = chars[1:]
+                if ord(c1) != 0x1B:
+                    sequence.append(c1)
+                    continue
+
+                if not chars:
+                    sequence.append(c1)
+                    break
+
+                c2 = chars[0]
+                chars = chars[1:]
+                if c2:
+                    if ord(c2) not in [0x5B, 0x4f]:
+                        sequence.append(c1 + c2)
+                        continue
+                else:
+                    sequence.append(c1)
+                    break
+
+                if not chars:
+                    break
+
+                c3 = chars[0]
+                chars = chars[1:]
+                if c3:
+                    if ord(c3) not in [0x31, 0x32, 0x33, 0x34, 0x35, 0x36]:
+                        sequence.append(c1 + c2 + c3)
+                        continue
+                else:
+                    sequence.append(c1 + c2)
+                    break
+
+                if not chars:
+                    break
+
+                c4 = chars[0]
+                chars = chars[1:]
+                if c4:
+                    sequence.append(c1 + c2 + c3 + c4)
+                    continue
+                else:
+                    sequence.append(c1 + c2 + c3)
+                    break
+            return sequence
+
+
+        try:
+            select.epoll # noqa
+        except AttributeError:
+
+            def _read_sequence(self, single_char=False):
+
+                try:
+                    old_settings = self._setup_tty()
+                    fd = self._stdin.fileno()
+                    fl = fcntl.fcntl(fd, fcntl.F_GETFL)
+                    fcntl.fcntl(fd, fcntl.F_SETFL, fl | os.O_NONBLOCK) # pylint: disable=maybe-no-member
+
+                    while True:
+
+                        inputready, _, exceptready = select.select([fd], [], [], 1)
+
+                        if fd in exceptready:
+                            raise readkey.ReadKeyError("Exception in stdin FD")
+
+                        if fd in inputready:
+                            chars = self._stdin.read()
+                            if chars:
+                                return self._sequence_from_input_data(chars, single_char=single_char)
+                        else:
+                            continue
+
+                        raise readkey.ReadKeyError("Select call returned without data")
+
+                except Exception as e:
+                    raise e
+                finally:
+                    fcntl.fcntl(fd, fcntl.F_SETFL, fl)
+                    self._restore_tty(old_settings)
+
+        else:
+
+            def _read_sequence(self, single_char=False):
+
+                try:
+                    old_settings = self._setup_tty()
+                    fd = self._stdin.fileno()
+                    fl = fcntl.fcntl(fd, fcntl.F_GETFL)
+                    fcntl.fcntl(fd, fcntl.F_SETFL, fl | os.O_NONBLOCK) # pylint: disable=maybe-no-member
+                    epoll = select.epoll() # pylint: disable=maybe-no-member
+                    epoll.register(fd, select.EPOLLIN) # pylint: disable=maybe-no-member
+
+                    while True:
+                        events = epoll.poll(1)
+                        if (fd, select.EPOLLIN) in events: # pylint: disable=maybe-no-member
+                            chars = self._stdin.read()
+                            if not chars:
+                                raise readkey.ReadKeyError("Epoll returned empty")
+
+                            return self._sequence_from_input_data(chars, single_char=single_char)
+
+                except Exception as e:
+                    raise e
+                finally:
+                    epoll.unregister(fd)
+                    epoll.close()
+                    fcntl.fcntl(fd, fcntl.F_SETFL, fl)
+                    self._restore_tty(old_settings)
+
+
+        def readkey(self):
+            try:
+                return self._read_sequence(single_char=True)[0]
+            except Exception as e:
+                raise e
+
+
+        def readkeys(self):
+            try:
+                return self._read_sequence()
+            except Exception as e:
+                raise e
+
+    elif sys.platform in ("win32", "cygwin"):
+
+        def readkey(self): # noqa
+            try:
+                if self._keyboard_interrupted:
+                    self._keyboard_interrupted = False
+                    raise KeyboardInterrupt
+
+                ch = msvcrt.getch()
+                a = ord(ch)
+                if a == 0 or a == 224:
+                    b = ord(msvcrt.getch())
+                    x = a + (b * 256)
+                    try:
+                        return xlate_dict[x]
+                    except KeyError:
+                        pass
+                    return x
+                else:
+                    if a in xlate_dict:
+                        return xlate_dict[a]
+                    return ch.decode()
+            except Exception as e:
+                raise e
+
+        def readkeys(self):
+            sequence = []
+            try:
+                while not msvcrt.kbhit():
+                    time.sleep(.01)
+                    if self._keyboard_interrupted:
+                        self._keyboard_interrupted = False
+                        raise KeyboardInterrupt
+                while msvcrt.kbhit():
+                    if self._keyboard_interrupted:
+                        self._keyboard_interrupted = False
+                        raise KeyboardInterrupt
+                    sequence.append(self.readkey())
+            except KeyboardInterrupt:
+                sequence.append(key.CTRL_C)
+            return sequence
